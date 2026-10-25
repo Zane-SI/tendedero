@@ -12,31 +12,54 @@ import Foundation
 /// set. Taking either over would mean driving its windows, which Tendedero
 /// does not do, so both are left alone.
 public enum ThirdPartyCapture {
+    /// How an app stores the folder it saves to.
+    public enum Preference: Equatable {
+        /// A keyed-archive of a file URL, as Clip stores
+        /// `screenshotSaveDirectory`. Absent means the app's own default.
+        case archivedURL(key: String)
+        /// A plain string path plus the security-scoped bookmark the app
+        /// resolves in preference to it, as Snapzy stores `exportLocation`
+        /// beside `exportLocation.bookmark`. The bookmark is dropped while
+        /// the app points at Tendedero and put back verbatim afterwards.
+        case stringPath(key: String, bookmarkKey: String)
+
+        fileprivate var directoryKey: String {
+            switch self {
+            case .archivedURL(let key), .stringPath(let key, _): return key
+            }
+        }
+    }
+
     /// One app whose new screenshots can be sent to Tendedero's folder.
     public struct App: Equatable {
         /// Stable id, also the UserDefaults domain the app reads.
         public let id: String
         /// What the menu shows. The app's own name, not a translation.
         public let name: String
-        /// `screenshotSaveDirectory` in Clip: a keyed-archive of a file URL.
-        /// Absent means the app is still on its own default folder.
-        public let directoryKey: String
+        /// Where the app keeps its save folder.
+        public let preference: Preference
 
-        public init(id: String, name: String, directoryKey: String) {
+        public init(id: String, name: String, preference: Preference) {
             self.id = id
             self.name = name
-            self.directoryKey = directoryKey
+            self.preference = preference
         }
 
         fileprivate var domain: CFString { id as CFString }
-        fileprivate var key: CFString { directoryKey as CFString }
+        fileprivate var key: CFString { preference.directoryKey as CFString }
     }
 
     /// Clip (`com.chengffei.clip`) stores the folder chosen in its settings.
     /// Until one is chosen the key is absent and captures stay in the app.
+    /// Snapzy (`com.trongduong.snapzy`) stores a plain path, with a bookmark
+    /// beside it that it resolves first. Its sandbox is off, so the keys can
+    /// be read and written from here.
     public static let known: [App] = [
         App(id: "com.chengffei.clip", name: "Clip",
-            directoryKey: "screenshotSaveDirectory"),
+            preference: .archivedURL(key: "screenshotSaveDirectory")),
+        App(id: "com.trongduong.snapzy", name: "Snapzy",
+            preference: .stringPath(key: "exportLocation",
+                                     bookmarkKey: "exportLocation.bookmark")),
     ]
 
     private static let enabledKey = "thirdPartyCaptureEnabled"
@@ -124,34 +147,70 @@ public enum ThirdPartyCapture {
     // MARK: - Reading and writing one preference
 
     /// What to put back. `present` is false when the key was absent, which is
-    /// the app's own default and not the same as an empty path.
+    /// the app's own default and not the same as an empty path. A string-path
+    /// app also keeps the bookmark bytes it had, so they return verbatim.
     private static func snapshot(of app: App) -> [String: Any] {
-        guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data else {
-            return ["present": false]
+        var saved: [String: Any] = ["present": false]
+        switch app.preference {
+        case .archivedURL:
+            if let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data {
+                saved = ["present": true, "archive": data]
+            }
+        case .stringPath(_, let bookmarkKey):
+            if let path = CFPreferencesCopyAppValue(app.key, app.domain) as? String {
+                saved = ["present": true, "path": path]
+            }
+            if let bookmark = CFPreferencesCopyAppValue(bookmarkKey as CFString, app.domain) as? Data {
+                saved["bookmark"] = bookmark
+            }
         }
-        return ["present": true, "archive": data]
+        return saved
     }
 
     private static func write(_ folder: URL, to app: App) {
-        guard let data = try? NSKeyedArchiver.archivedData(
-            withRootObject: folder as NSURL, requiringSecureCoding: true) else { return }
-        CFPreferencesSetAppValue(app.key, data as CFData, app.domain)
+        switch app.preference {
+        case .archivedURL:
+            guard let data = try? NSKeyedArchiver.archivedData(
+                withRootObject: folder as NSURL, requiringSecureCoding: true) else { return }
+            CFPreferencesSetAppValue(app.key, data as CFData, app.domain)
+        case .stringPath(_, let bookmarkKey):
+            // The bookmark is what the app resolves, so a stale one would keep
+            // sending captures to the old folder. It comes back on restore.
+            CFPreferencesSetAppValue(app.key, folder.path as CFString, app.domain)
+            CFPreferencesSetAppValue(bookmarkKey as CFString, nil, app.domain)
+        }
         CFPreferencesAppSynchronize(app.domain)
     }
 
-    /// A snapshot with no archive removes the key, back to the app's default.
+    /// A snapshot with no value removes the key, back to the app's default.
+    /// A string comes back as a string, never as an archive.
     private static func writeBack(_ snapshot: [String: Any]?, to app: App) {
-        let archive = snapshot?["archive"] as? Data
-        CFPreferencesSetAppValue(app.key, archive as CFData?, app.domain)
+        switch app.preference {
+        case .archivedURL:
+            let archive = snapshot?["archive"] as? Data
+            CFPreferencesSetAppValue(app.key, archive as CFData?, app.domain)
+        case .stringPath(_, let bookmarkKey):
+            let path = snapshot?["path"] as? String
+            CFPreferencesSetAppValue(app.key, path as CFString?, app.domain)
+            let bookmark = snapshot?["bookmark"] as? Data
+            CFPreferencesSetAppValue(bookmarkKey as CFString, bookmark as CFData?, app.domain)
+        }
         CFPreferencesAppSynchronize(app.domain)
     }
 
-    /// The archived folder, whether or not it is still on disk.
+    /// The folder the preference names, whether or not it is still on disk.
     private static func storedURL(_ app: App) -> URL? {
-        guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data,
-              let url = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSURL.self, from: data) as URL?,
-              url.isFileURL else { return nil }
-        return url
+        switch app.preference {
+        case .archivedURL:
+            guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data,
+                  let url = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSURL.self, from: data) as URL?,
+                  url.isFileURL else { return nil }
+            return url
+        case .stringPath:
+            guard let path = CFPreferencesCopyAppValue(app.key, app.domain) as? String,
+                  !path.isEmpty else { return nil }
+            return URL(fileURLWithPath: path)
+        }
     }
 
     private static func bundleExists(id: String) -> Bool {

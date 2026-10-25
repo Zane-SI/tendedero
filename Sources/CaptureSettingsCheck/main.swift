@@ -9,7 +9,16 @@ let domain = "com.tendedero.third-party-capture.check"
 let key = "screenshotSaveDirectory" as CFString
 let domainCF = domain as CFString
 let app = ThirdPartyCapture.App(
-    id: domain, name: "Stand-in", directoryKey: "screenshotSaveDirectory")
+    id: domain, name: "Stand-in",
+    preference: .archivedURL(key: "screenshotSaveDirectory"))
+
+/// A second stand-in in the same domain, shaped like Snapzy: a plain string
+/// path with a bookmark beside it. It never names a real app's domain.
+let pathKey = "exportLocation" as CFString
+let bookmarkKey = "exportLocation.bookmark" as CFString
+let stringApp = ThirdPartyCapture.App(
+    id: domain, name: "String stand-in",
+    preference: .stringPath(key: "exportLocation", bookmarkKey: "exportLocation.bookmark"))
 
 func fail(_ message: String) -> Never {
     fputs("FAIL \(message)\n", stderr)
@@ -28,6 +37,14 @@ func stored() -> Data? {
     CFPreferencesCopyAppValue(key, domainCF) as? Data
 }
 
+func storedString() -> String? {
+    CFPreferencesCopyAppValue(pathKey, domainCF) as? String
+}
+
+func storedBookmark() -> Data? {
+    CFPreferencesCopyAppValue(bookmarkKey, domainCF) as? Data
+}
+
 @main
 enum CheckThirdParty {
     static func main() throws {
@@ -40,6 +57,8 @@ let own = FileManager.default.temporaryDirectory
     .appendingPathComponent("tendedero-own-\(UUID().uuidString)", isDirectory: true)
 defer {
     CFPreferencesSetAppValue(key, nil, domainCF)
+    CFPreferencesSetAppValue(pathKey, nil, domainCF)
+    CFPreferencesSetAppValue(bookmarkKey, nil, domainCF)
     CFPreferencesAppSynchronize(domainCF)
     try? FileManager.default.removeItem(at: own)
     UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
@@ -83,6 +102,46 @@ CFPreferencesAppSynchronize(domainCF)
 ThirdPartyCapture.restore(app)
 if stored() != moved { fail("restore overwrote a folder the user chose") }
 print("restore leaves a folder the user moved")
+
+// A plain string path comes back as that exact string, and its bookmark
+// bytes come back with it. Nothing is re-archived.
+let previous = own.path
+let bookmark = Data("bookmark-bytes".utf8)
+CFPreferencesSetAppValue(pathKey, previous as CFString, domainCF)
+CFPreferencesSetAppValue(bookmarkKey, bookmark as CFData, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: stringApp)
+if ThirdPartyCapture.saveDirectory(of: stringApp)?.standardizedFileURL != Inbox.folder.standardizedFileURL {
+    fail("apply did not point the string app at Tendedero")
+}
+if storedBookmark() != nil { fail("apply left the stale bookmark in place") }
+ThirdPartyCapture.restore(stringApp)
+if storedString() != previous { fail("restore changed the string path the app had") }
+if storedBookmark() != bookmark { fail("restore changed the bookmark the app had") }
+print("restore keeps the previous string path and bookmark")
+
+// An unset string key is the app's own default, so it is removed again.
+CFPreferencesSetAppValue(pathKey, nil, domainCF)
+CFPreferencesSetAppValue(bookmarkKey, nil, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: stringApp)
+if storedString() == nil { fail("apply did not set a string path") }
+ThirdPartyCapture.restore(stringApp)
+if storedString() != nil { fail("restore left a string path where none was set") }
+if storedBookmark() != nil { fail("restore left a bookmark where none was set") }
+print("restore clears a string path that was never set")
+
+// A path the user picks while the option is on is left alone.
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: stringApp)
+let chosen = own.appendingPathComponent("chosen").path
+CFPreferencesSetAppValue(pathKey, chosen as CFString, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+ThirdPartyCapture.restore(stringApp)
+if storedString() != chosen { fail("restore overwrote a string path the user chose") }
+print("restore leaves a string path the user moved")
 
 print("ok")
 }
