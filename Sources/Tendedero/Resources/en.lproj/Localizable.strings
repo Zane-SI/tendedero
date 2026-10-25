@@ -12,6 +12,8 @@
 "Take everything down" = "Take everything down";
 "Handle screenshots" = "Handle screenshots";
 "Screenshots hang instantly and skip the Desktop" = "Screenshots hang instantly and skip the Desktop";
+"Handle other screenshot apps" = "Handle other screenshot apps";
+"New captures from %@ hang on the line" = "New captures from %@ hang on the line";
 "Open screenshots folder" = "Open screenshots folder";
 "Sounds" = "Sounds";
 "Open at login" = "Open at login";

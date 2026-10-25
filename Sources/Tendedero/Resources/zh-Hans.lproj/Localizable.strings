@@ -10,6 +10,8 @@
 "Take everything down" = "全部取下";
 "Handle screenshots" = "接管截图";
 "Screenshots hang instantly and skip the Desktop" = "截图即刻挂上，不再经过桌面";
+"Handle other screenshot apps" = "接管其他截图 App";
+"New captures from %@ hang on the line" = "%@ 的新截图会挂到晾衣绳上";
 "Open screenshots folder" = "打开截图文件夹";
 "Sounds" = "声音";
 "Open at login" = "登录时打开";

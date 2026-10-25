@@ -22,6 +22,8 @@
 "Keep on line" = "İpdə saxla";
 "As many as fit" = "Sığdığı qədər";
 "%d photos" = "%d şəkil";
+"Handle other screenshot apps" = "Digər ekran görüntüsü proqramlarını da öz üzərinə götür";
+"New captures from %@ hang on the line" = "%@ proqramının yeni şəkilləri ipdən asılacaq";
 "Also watch folders" = "Qovluqları da izlə";
 "Add Folder…" = "Qovluq əlavə et…";
 "Stop Watching" = "İzləməyi dayandır";

@@ -20,6 +20,8 @@
 "Keep on line" = "İpte tut";
 "As many as fit" = "Sığdığı kadar";
 "%d photos" = "%d fotoğraf";
+"Handle other screenshot apps" = "Diğer ekran görüntüsü uygulamalarını da üstlen";
+"New captures from %@ hang on the line" = "%@ uygulamasının yeni çekimleri ipe asılır";
 "Also watch folders" = "Klasörleri de izle";
 "Add Folder…" = "Klasör ekle…";
 "Stop Watching" = "İzlemeyi durdur";

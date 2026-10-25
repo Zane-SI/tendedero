@@ -22,6 +22,8 @@
 "Keep on line" = "रस्सी पर रखें";
 "As many as fit" = "जितने आ सकें";
 "%d photos" = "%d फ़ोटो";
+"Handle other screenshot apps" = "बाकी स्क्रीनशॉट ऐप भी संभालें";
+"New captures from %@ hang on the line" = "%@ की नई तस्वीरें रस्सी पर टँग जाएँगी";
 "Also watch folders" = "फ़ोल्डर पर भी नज़र रखें";
 "Add Folder…" = "फ़ोल्डर जोड़ें…";
 "Stop Watching" = "नज़र रखना बंद करें";

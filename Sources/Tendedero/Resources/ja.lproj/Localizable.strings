@@ -10,6 +10,8 @@
 "Take everything down" = "すべて外す";
 "Handle screenshots" = "スクリーンショットを任せる";
 "Screenshots hang instantly and skip the Desktop" = "撮った瞬間に吊るされ、デスクトップを経由しません";
+"Handle other screenshot apps" = "他のスクリーンショットアプリも任せる";
+"New captures from %@ hang on the line" = "%@ の新しいキャプチャもロープに吊るされます";
 "Open screenshots folder" = "スクリーンショットのフォルダを開く";
 "Sounds" = "サウンド";
 "Open at login" = "ログイン時に開く";

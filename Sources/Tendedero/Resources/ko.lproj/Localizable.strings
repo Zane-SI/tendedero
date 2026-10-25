@@ -10,6 +10,8 @@
 "Take everything down" = "모두 걷어내기";
 "Handle screenshots" = "스크린샷 관리";
 "Screenshots hang instantly and skip the Desktop" = "스크린샷이 바로 걸리고 데스크탑을 거치지 않아요";
+"Handle other screenshot apps" = "다른 스크린샷 앱도 관리";
+"New captures from %@ hang on the line" = "%@의 새 캡처도 빨랫줄에 걸려요";
 "Open screenshots folder" = "스크린샷 폴더 열기";
 "Sounds" = "사운드";
 "Open at login" = "로그인 시 열기";

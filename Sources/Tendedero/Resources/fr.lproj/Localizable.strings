@@ -10,6 +10,8 @@
 "Take everything down" = "Tout décrocher";
 "Handle screenshots" = "Gérer les captures d’écran";
 "Screenshots hang instantly and skip the Desktop" = "Les captures s’accrochent aussitôt et évitent le bureau";
+"Handle other screenshot apps" = "Gérer les autres apps de capture";
+"New captures from %@ hang on the line" = "Les nouvelles captures de %@ s’accrochent à la corde";
 "Open screenshots folder" = "Ouvrir le dossier des captures";
 "Sounds" = "Sons";
 "Open at login" = "Ouvrir à l’ouverture de session";

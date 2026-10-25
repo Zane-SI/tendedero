@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateCapacity()
 
         if Inbox.isEnabled { Inbox.apply() }
+        if ThirdPartyCapture.isEnabled { ThirdPartyCapture.apply() }
         restoreSettingsOnTermination()
         startWatcher()
         clipboardWatcher = ClipboardWatcher { [weak self] url in self?.hangCapture(url) }
@@ -145,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if Inbox.isEnabled { Inbox.restore() }
+        if ThirdPartyCapture.isEnabled { ThirdPartyCapture.restore() }
     }
 
     // MARK: Inbox mode
@@ -170,9 +172,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         folderWatchers.forEach { $0.stop() }
         folderWatchers = []
-        // A folder may also be watched for screenshots, like the Desktop; an
-        // image both report hangs once.
-        for folder in Self.extraFolders {
+        // A folder may also be watched for screenshots, like the Desktop.
+        // One a third-party app is already sending into Tendedero's folder
+        // is skipped here, or the same capture would hang twice.
+        let takenOver = ThirdPartyCapture.isEnabled
+            ? ThirdPartyCapture.installed().compactMap(ThirdPartyCapture.saveDirectory)
+            : []
+        for folder in Self.extraFolders where !takenOver.contains(where: {
+            $0.standardizedFileURL == folder.standardizedFileURL
+        }) {
             let extra = ScreenshotWatcher(
                 folder: folder, anyImage: true,
                 onNew: { [weak self] url in self?.hangCapture(url) },
@@ -180,6 +188,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             extra.start()
             folderWatchers.append(extra)
         }
+        // A third-party app that is not redirected keeps saving to its own
+        // folder. Watching that folder is what makes a new capture hang.
+        if ThirdPartyCapture.isEnabled {
+            for app in ThirdPartyCapture.installed() {
+                guard let folder = ThirdPartyCapture.saveDirectory(of: app),
+                      !Self.alreadyWatched(folder, by: folderWatchers) else { continue }
+                let extra = ScreenshotWatcher(
+                    folder: folder, anyImage: true,
+                    onNew: { [weak self] url in self?.hangCapture(url) },
+                    onChange: { [weak self] in self?.line.prune() })
+                extra.start()
+                folderWatchers.append(extra)
+            }
+        }
+    }
+
+    /// The Desktop and the system screenshot folder already have their own
+    /// watchers, and two watchers on one folder would hang each capture twice.
+    private static func alreadyWatched(_ folder: URL, by watchers: [ScreenshotWatcher]) -> Bool {
+        let path = folder.standardizedFileURL.path
+        if path == ScreenshotWatcher.desktop.standardizedFileURL.path { return true }
+        if path == Inbox.folder.standardizedFileURL.path { return true }
+        return watchers.contains { $0.folder.standardizedFileURL.path == path }
     }
 
     /// Up to three folders: enough for another screenshot app or an export
@@ -220,6 +251,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startWatcher()
     }
 
+    /// The same choice for the third-party apps that are installed. Turning
+    /// it off puts each app's save folder back before the watcher restarts,
+    /// so a capture taken afterwards stays in the user's own folder.
+    private func setThirdParty(_ on: Bool) {
+        ThirdPartyCapture.isEnabled = on
+        if on { ThirdPartyCapture.apply() } else { ThirdPartyCapture.restore() }
+        startWatcher()
+    }
+
     /// Asked once. Changing system settings is the user's call, never ours.
     private func offerInbox() {
         Inbox.wasOffered = true
@@ -249,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler {
                 if Inbox.isEnabled { Inbox.restore() }
+                if ThirdPartyCapture.isEnabled { ThirdPartyCapture.restore() }
                 exit(0)
             }
             source.resume()
@@ -667,6 +708,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inbox.state = Inbox.isEnabled ? .on : .off
         inbox.toolTip = L("Screenshots hang instantly and skip the Desktop")
         menu.addItem(inbox)
+
+        // Only the apps actually installed are offered. CleanShot X and
+        // Shottr never appear: their save folder is not a preference.
+        let thirdParty = ThirdPartyCapture.installed()
+        if !thirdParty.isEmpty {
+            let item = ClosureMenuItem(L("Handle other screenshot apps")) { [weak self] in
+                self?.setThirdParty(!ThirdPartyCapture.isEnabled)
+            }
+            item.state = ThirdPartyCapture.isEnabled ? .on : .off
+            let names = thirdParty.map(\.name).joined(separator: ", ")
+            item.toolTip = String(format: L("New captures from %@ hang on the line"), names)
+            menu.addItem(item)
+        }
 
         let clipboard = ClosureMenuItem(L("Hang copied images")) { [weak self] in
             self?.setClipboard(!ClipboardWatcher.isEnabled)

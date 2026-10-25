@@ -20,6 +20,8 @@
 "Keep on line" = "Manter no varal";
 "As many as fit" = "Quantas couberem";
 "%d photos" = "%d fotos";
+"Handle other screenshot apps" = "Cuidar de outros apps de captura";
+"New captures from %@ hang on the line" = "As novas capturas de %@ vão para o varal";
 "Also watch folders" = "Monitorar também pastas";
 "Add Folder…" = "Adicionar Pasta…";
 "Stop Watching" = "Parar de Monitorar";
