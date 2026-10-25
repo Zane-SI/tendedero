@@ -79,13 +79,13 @@ public enum ThirdPartyCapture {
         write(Inbox.folder, to: app)
     }
 
-    /// Puts back every app we redirected, from the snapshot. An app that is
-    /// not on this Mac right now is still put back, so a later reinstall gets
-    /// its own folder. One the user moved somewhere else is left alone.
+    /// Puts back every known app we redirected, from the snapshot, even when
+    /// it is not on this Mac right now. A later reinstall gets its own folder.
+    /// One the user moved somewhere else is left alone.
     public static func restore() {
         let saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
-        for (id, value) in saved {
-            guard let app = app(forSavedID: id, value: value) else { continue }
+        for id in saved.keys {
+            guard let app = known.first(where: { $0.id == id }) else { continue }
             restore(app)
         }
     }
@@ -124,25 +124,12 @@ public enum ThirdPartyCapture {
     // MARK: - Reading and writing one preference
 
     /// What to put back. `present` is false when the key was absent, which is
-    /// the app's own default and not the same as an empty path. The directory
-    /// key is kept so the snapshot can be written back without the app list.
+    /// the app's own default and not the same as an empty path.
     private static func snapshot(of app: App) -> [String: Any] {
-        var saved: [String: Any] = ["directoryKey": app.directoryKey]
         guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data else {
-            saved["present"] = false
-            return saved
+            return ["present": false]
         }
-        saved["present"] = true
-        saved["archive"] = data
-        return saved
-    }
-
-    /// The app a snapshot belongs to. A known id wins; a snapshot that carries
-    /// its own directory key is still put back when that id is not in the list.
-    private static func app(forSavedID id: String, value: Any) -> App? {
-        if let app = known.first(where: { $0.id == id }) { return app }
-        guard let directoryKey = (value as? [String: Any])?["directoryKey"] as? String else { return nil }
-        return App(id: id, name: id, directoryKey: directoryKey)
+        return ["present": true, "archive": data]
     }
 
     private static func write(_ folder: URL, to app: App) {
