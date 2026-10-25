@@ -194,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ThirdPartyCapture.isEnabled {
             for app in ThirdPartyCapture.installed() {
                 guard let folder = ThirdPartyCapture.saveDirectory(of: app),
-                      !Self.alreadyWatched(folder, by: folderWatchers) else { continue }
+                      !alreadyWatched(folder, by: folderWatchers) else { continue }
                 let extra = ScreenshotWatcher(
                     folder: folder, anyImage: true,
                     onNew: { [weak self] url in self?.hangCapture(url) },
@@ -205,12 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The Desktop and the system screenshot folder already have their own
-    /// watchers, and two watchers on one folder would hang each capture twice.
-    private static func alreadyWatched(_ folder: URL, by watchers: [ScreenshotWatcher]) -> Bool {
+    /// True when a watcher is already on this folder. A second one would hang
+    /// each capture twice.
+    private func alreadyWatched(_ folder: URL, by watchers: [ScreenshotWatcher]) -> Bool {
         let path = folder.standardizedFileURL.path
-        if path == ScreenshotWatcher.desktop.standardizedFileURL.path { return true }
-        if path == Inbox.folder.standardizedFileURL.path { return true }
+        if watcher.folder.standardizedFileURL.path == path { return true }
+        if safetyWatcher?.folder.standardizedFileURL.path == path { return true }
         return watchers.contains { $0.folder.standardizedFileURL.path == path }
     }
 

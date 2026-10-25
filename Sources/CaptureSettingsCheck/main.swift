@@ -9,7 +9,7 @@ let domain = "com.tendedero.third-party-capture.check"
 let key = "screenshotSaveDirectory" as CFString
 let domainCF = domain as CFString
 let app = ThirdPartyCapture.App(
-    id: domain, name: "Stand-in", directoryKey: "screenshotSaveDirectory", defaultDirectory: nil)
+    id: domain, name: "Stand-in", directoryKey: "screenshotSaveDirectory")
 
 func fail(_ message: String) -> Never {
     fputs("FAIL \(message)\n", stderr)
@@ -83,6 +83,41 @@ CFPreferencesAppSynchronize(domainCF)
 ThirdPartyCapture.restore(app)
 if stored() != moved { fail("restore overwrote a folder the user chose") }
 print("restore leaves a folder the user moved")
+
+// Quitting puts the folder back from the snapshot. The stand-in is not in
+// /Applications, which is the app moved into a subfolder or deleted.
+let previous = archive(own)
+CFPreferencesSetAppValue(key, previous as CFData, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: app)
+ThirdPartyCapture.restore()
+if stored() != previous {
+    fail("restore() dropped a saved folder when the app was not seen on disk")
+}
+print("restore puts back a folder saved for an app that is not installed")
+
+// The folder Tendedero pointed at can be gone. That is still a redirect,
+// and the previous folder has to come back.
+ThirdPartyCapture.apply(to: app)
+let parked = Inbox.folder.deletingLastPathComponent()
+    .appendingPathComponent(".tendedero-check-\(UUID().uuidString)", isDirectory: true)
+var after: Data?
+do {
+    try FileManager.default.moveItem(at: Inbox.folder, to: parked)
+    defer {
+        if !FileManager.default.fileExists(atPath: Inbox.folder.path) {
+            try? FileManager.default.moveItem(at: parked, to: Inbox.folder)
+        }
+    }
+    ThirdPartyCapture.restore(app)
+    after = stored()
+}
+guard let after else { fail("restore did not run") }
+if after != previous {
+    fail("restore dropped the previous folder when Tendedero's folder was missing")
+}
+print("restore puts back a folder when Tendedero's folder is gone")
 
 print("ok")
 }

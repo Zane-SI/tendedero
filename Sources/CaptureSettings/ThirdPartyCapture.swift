@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Third-party screenshot apps Tendedero can take over the same way it takes
@@ -20,16 +21,11 @@ public enum ThirdPartyCapture {
         /// `screenshotSaveDirectory` in Clip: a keyed-archive of a file URL.
         /// Absent means the app is still on its own default folder.
         public let directoryKey: String
-        /// Where captures go while the key is absent. `nil` when that default
-        /// is not a folder Tendedero can watch, so the app is skipped until
-        /// the user has chosen one.
-        public let defaultDirectory: URL?
 
-        public init(id: String, name: String, directoryKey: String, defaultDirectory: URL?) {
+        public init(id: String, name: String, directoryKey: String) {
             self.id = id
             self.name = name
             self.directoryKey = directoryKey
-            self.defaultDirectory = defaultDirectory
         }
 
         fileprivate var domain: CFString { id as CFString }
@@ -40,7 +36,7 @@ public enum ThirdPartyCapture {
     /// Until one is chosen the key is absent and captures stay in the app.
     public static let known: [App] = [
         App(id: "com.chengffei.clip", name: "Clip",
-            directoryKey: "screenshotSaveDirectory", defaultDirectory: nil),
+            directoryKey: "screenshotSaveDirectory"),
     ]
 
     private static let enabledKey = "thirdPartyCaptureEnabled"
@@ -53,20 +49,11 @@ public enum ThirdPartyCapture {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
-    /// Known apps that are on this Mac. Detection is the bundle id, so a
-    /// renamed copy still counts and an unrelated app does not.
+    /// Known apps that are on this Mac. Launch Services matches the bundle id
+    /// wherever the app lives, so a renamed or nested copy still counts and an
+    /// unrelated app does not.
     public static func installed() -> [App] {
-        let fm = FileManager.default
-        let roots = [
-            URL(fileURLWithPath: "/Applications", isDirectory: true),
-            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true),
-        ]
-        var found: [App] = []
-        for app in known where bundleExists(id: app.id, in: roots) {
-            found.append(app)
-        }
-        return found
+        known.filter { bundleExists(id: $0.id) }
     }
 
     /// Points every installed app at Tendedero's folder, remembering what
@@ -86,14 +73,21 @@ public enum ThirdPartyCapture {
         var saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
         saved[app.id] = snapshot(of: app)
         UserDefaults.standard.set(saved, forKey: savedKey)
+        // The snapshot has to reach disk before the other app is redirected.
+        // A kill in between would leave the redirect and forget the folder.
+        guard UserDefaults.standard.synchronize() else { return }
         write(Inbox.folder, to: app)
     }
 
-    /// Puts back only the apps still pointing at Tendedero. One the user
-    /// moved somewhere else while the option was on is theirs again.
+    /// Puts back every app we redirected, from the snapshot. An app that is
+    /// not on this Mac right now is still put back, so a later reinstall gets
+    /// its own folder. One the user moved somewhere else is left alone.
     public static func restore() {
-        for app in installed() { restore(app) }
-        UserDefaults.standard.removeObject(forKey: savedKey)
+        let saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
+        for (id, value) in saved {
+            guard let app = app(forSavedID: id, value: value) else { continue }
+            restore(app)
+        }
     }
 
     /// Puts one app back and drops it from the memory. The others stay.
@@ -108,32 +102,47 @@ public enum ThirdPartyCapture {
         }
     }
 
-    /// Where an app saves right now: the preference when it has one, otherwise
-    /// its default folder. `nil` when there is nothing to watch.
+    /// Where an app saves right now, when that folder is still on disk.
+    /// `nil` when the key is absent or the folder is gone, so there is nothing
+    /// to watch.
     public static func saveDirectory(of app: App) -> URL? {
-        if let stored = readURL(app) { return stored }
-        guard let fallback = app.defaultDirectory else { return nil }
+        guard let stored = storedURL(app) else { return nil }
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: fallback.path, isDirectory: &isDir),
+        guard FileManager.default.fileExists(atPath: stored.path, isDirectory: &isDir),
               isDir.boolValue else { return nil }
-        return fallback
+        return stored
     }
 
-    /// Whether this app's preference currently names Tendedero's folder.
+    /// Whether this app's preference names Tendedero's folder, even if that
+    /// folder has since been removed. A missing folder is not a folder the
+    /// user picked.
     public static func isRedirected(_ app: App) -> Bool {
-        guard let current = readURL(app) else { return false }
+        guard let current = storedURL(app) else { return false }
         return current.standardizedFileURL == Inbox.folder.standardizedFileURL
     }
 
     // MARK: - Reading and writing one preference
 
     /// What to put back. `present` is false when the key was absent, which is
-    /// the app's own default and not the same as an empty path.
+    /// the app's own default and not the same as an empty path. The directory
+    /// key is kept so the snapshot can be written back without the app list.
     private static func snapshot(of app: App) -> [String: Any] {
+        var saved: [String: Any] = ["directoryKey": app.directoryKey]
         guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data else {
-            return ["present": false]
+            saved["present"] = false
+            return saved
         }
-        return ["present": true, "archive": data]
+        saved["present"] = true
+        saved["archive"] = data
+        return saved
+    }
+
+    /// The app a snapshot belongs to. A known id wins; a snapshot that carries
+    /// its own directory key is still put back when that id is not in the list.
+    private static func app(forSavedID id: String, value: Any) -> App? {
+        if let app = known.first(where: { $0.id == id }) { return app }
+        guard let directoryKey = (value as? [String: Any])?["directoryKey"] as? String else { return nil }
+        return App(id: id, name: id, directoryKey: directoryKey)
     }
 
     private static func write(_ folder: URL, to app: App) {
@@ -150,29 +159,15 @@ public enum ThirdPartyCapture {
         CFPreferencesAppSynchronize(app.domain)
     }
 
-    /// The folder stored for this app, when the value is an archived file URL
-    /// and the folder is still there. Anything else is left unread.
-    private static func readURL(_ app: App) -> URL? {
+    /// The archived folder, whether or not it is still on disk.
+    private static func storedURL(_ app: App) -> URL? {
         guard let data = CFPreferencesCopyAppValue(app.key, app.domain) as? Data,
               let url = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSURL.self, from: data) as URL?,
               url.isFileURL else { return nil }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
-              isDir.boolValue else { return nil }
         return url
     }
 
-    private static func bundleExists(id: String, in roots: [URL]) -> Bool {
-        for root in roots {
-            guard let apps = try? FileManager.default.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
-            for app in apps where app.pathExtension == "app" {
-                let info = app.appendingPathComponent("Contents/Info.plist")
-                guard let bundleID = NSDictionary(contentsOf: info)?["CFBundleIdentifier"] as? String,
-                      bundleID == id else { continue }
-                return true
-            }
-        }
-        return false
+    private static func bundleExists(id: String) -> Bool {
+        !NSWorkspace.shared.urlsForApplications(withBundleIdentifier: id).isEmpty
     }
 }
