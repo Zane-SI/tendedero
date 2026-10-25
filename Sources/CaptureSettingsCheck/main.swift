@@ -143,5 +143,25 @@ ThirdPartyCapture.restore(stringApp)
 if storedString() != chosen { fail("restore overwrote a string path the user chose") }
 print("restore leaves a string path the user moved")
 
+// A snapshot that was lost must not delete the folder the app still has.
+let kept = archive(own)
+CFPreferencesSetAppValue(key, kept as CFData, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.set([domain: ["present": true]], forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.restore(app)
+if stored() != kept { fail("restore deleted a folder whose snapshot was lost") }
+print("restore keeps a folder when the snapshot is missing")
+
+let keptPath = own.path
+let keptBookmark = Data("kept-bookmark".utf8)
+CFPreferencesSetAppValue(pathKey, keptPath as CFString, domainCF)
+CFPreferencesSetAppValue(bookmarkKey, keptBookmark as CFData, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.set([domain: ["present": true]], forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.restore(stringApp)
+if storedString() != keptPath { fail("restore deleted a string path whose snapshot was lost") }
+if storedBookmark() != keptBookmark { fail("restore deleted a bookmark whose snapshot was lost") }
+print("restore keeps a string path when the snapshot is missing")
+
 print("ok")
 }

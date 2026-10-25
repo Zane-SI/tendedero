@@ -114,9 +114,13 @@ public enum ThirdPartyCapture {
     }
 
     /// Puts one app back and drops it from the memory. The others stay.
+    /// A snapshot that was lost is not the same as a key the app never had,
+    /// so the preference is left exactly as it is rather than deleted.
     public static func restore(_ app: App) {
         var saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
-        if isRedirected(app) { writeBack(saved[app.id] as? [String: Any], to: app) }
+        if isRedirected(app), let snapshot = saved[app.id] as? [String: Any] {
+            writeBack(snapshot, to: app)
+        }
         saved[app.id] = nil
         if saved.isEmpty {
             UserDefaults.standard.removeObject(forKey: savedKey)
@@ -138,10 +142,17 @@ public enum ThirdPartyCapture {
 
     /// Whether this app's preference names Tendedero's folder, even if that
     /// folder has since been removed. A missing folder is not a folder the
-    /// user picked.
+    /// user picked. A string-path app whose bookmark is still set is not done
+    /// either: the bookmark is what it resolves, so the redirect has to be
+    /// tried again.
     public static func isRedirected(_ app: App) -> Bool {
         guard let current = storedURL(app) else { return false }
-        return current.standardizedFileURL == Inbox.folder.standardizedFileURL
+        guard current.standardizedFileURL == Inbox.folder.standardizedFileURL else { return false }
+        if case .stringPath(_, let bookmarkKey) = app.preference,
+           CFPreferencesCopyAppValue(bookmarkKey as CFString, app.domain) != nil {
+            return false
+        }
+        return true
     }
 
     // MARK: - Reading and writing one preference
@@ -175,24 +186,30 @@ public enum ThirdPartyCapture {
             CFPreferencesSetAppValue(app.key, data as CFData, app.domain)
         case .stringPath(_, let bookmarkKey):
             // The bookmark is what the app resolves, so a stale one would keep
-            // sending captures to the old folder. It comes back on restore.
+            // sending captures to the old folder. Both changes are set before
+            // the one synchronize, so the path never lands without the removal.
+            // It comes back on restore.
             CFPreferencesSetAppValue(app.key, folder.path as CFString, app.domain)
             CFPreferencesSetAppValue(bookmarkKey as CFString, nil, app.domain)
         }
         CFPreferencesAppSynchronize(app.domain)
     }
 
-    /// A snapshot with no value removes the key, back to the app's default.
-    /// A string comes back as a string, never as an archive.
-    private static func writeBack(_ snapshot: [String: Any]?, to app: App) {
+    /// A snapshot whose key was absent removes it, back to the app's default.
+    /// One that carries no saved value is left untouched, so a lost snapshot
+    /// cannot delete the folder the user had. A string comes back as a string,
+    /// never as an archive.
+    private static func writeBack(_ snapshot: [String: Any], to app: App) {
         switch app.preference {
         case .archivedURL:
-            let archive = snapshot?["archive"] as? Data
+            guard snapshot["archive"] != nil || snapshot["present"] as? Bool == false else { return }
+            let archive = snapshot["archive"] as? Data
             CFPreferencesSetAppValue(app.key, archive as CFData?, app.domain)
         case .stringPath(_, let bookmarkKey):
-            let path = snapshot?["path"] as? String
+            guard snapshot["path"] != nil || snapshot["present"] as? Bool == false else { return }
+            let path = snapshot["path"] as? String
             CFPreferencesSetAppValue(app.key, path as CFString?, app.domain)
-            let bookmark = snapshot?["bookmark"] as? Data
+            let bookmark = snapshot["bookmark"] as? Data
             CFPreferencesSetAppValue(bookmarkKey as CFString, bookmark as CFData?, app.domain)
         }
         CFPreferencesAppSynchronize(app.domain)
