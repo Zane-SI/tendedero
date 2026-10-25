@@ -1,4 +1,5 @@
 import AppKit
+import CaptureSettings
 import Carbon
 import Combine
 import Quartz
