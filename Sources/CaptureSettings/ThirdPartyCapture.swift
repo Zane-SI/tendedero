@@ -38,11 +38,15 @@ public enum ThirdPartyCapture {
         public let name: String
         /// Where the app keeps its save folder.
         public let preference: Preference
+        /// A built-in app ships with Tendedero. One the user added is stored in
+        /// the JSON file and can be removed again.
+        public let builtIn: Bool
 
-        public init(id: String, name: String, preference: Preference) {
+        public init(id: String, name: String, preference: Preference, builtIn: Bool = false) {
             self.id = id
             self.name = name
             self.preference = preference
+            self.builtIn = builtIn
         }
 
         fileprivate var domain: CFString { id as CFString }
@@ -56,14 +60,27 @@ public enum ThirdPartyCapture {
     /// be read and written from here.
     public static let known: [App] = [
         App(id: "com.chengffei.clip", name: "Clip",
-            preference: .archivedURL(key: "screenshotSaveDirectory")),
+            preference: .archivedURL(key: "screenshotSaveDirectory"), builtIn: true),
         App(id: "com.trongduong.snapzy", name: "Snapzy",
             preference: .stringPath(key: "exportLocation",
-                                     bookmarkKey: "exportLocation.bookmark")),
+                                     bookmarkKey: "exportLocation.bookmark"), builtIn: true),
     ]
+
+    /// The built-ins plus the apps the user added, built-ins first. A user
+    /// entry that repeats a built-in id is dropped, so the built-in wins.
+    /// `includingExcluded` keeps the ones the user turned off, which a restore
+    /// still has to put back.
+    public static func apps(includingExcluded: Bool = false) -> [App] {
+        let extras = userApps().filter { extra in !known.contains { $0.id == extra.id } }
+        let all = known + extras
+        return includingExcluded ? all : all.filter(isIncluded)
+    }
 
     private static let enabledKey = "thirdPartyCaptureEnabled"
     private static let savedKey = "thirdPartyCaptureSaved"
+    /// Bundle ids the user turned off, one by one. Absent means included, so a
+    /// built-in stays on until someone unchecks it.
+    private static let excludedKey = "thirdPartyCaptureExcluded"
 
     /// The user's choice, kept across launches. Nothing is written to another
     /// app until this is on and that app is actually installed.
@@ -72,11 +89,79 @@ public enum ThirdPartyCapture {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
-    /// Known apps that are on this Mac. Launch Services matches the bundle id
-    /// wherever the app lives, so a renamed or nested copy still counts and an
-    /// unrelated app does not.
+    /// Apps that are on this Mac, built-ins and user-added alike. Launch
+    /// Services matches the bundle id wherever the app lives, so a renamed or
+    /// nested copy still counts and an unrelated app does not.
     public static func installed() -> [App] {
-        known.filter { bundleExists(id: $0.id) }
+        apps().filter { bundleExists(id: $0.id) }
+    }
+
+    /// Every app on this Mac, included or not, so the menu can show the ones
+    /// the user turned off and let them be turned back on.
+    public static func present() -> [App] {
+        apps(includingExcluded: true).filter { bundleExists(id: $0.id) }
+    }
+
+    /// Whether the user left this app in the takeover. The master switch is a
+    /// separate choice and still decides whether any app is taken over.
+    public static func isIncluded(_ app: App) -> Bool {
+        let excluded = UserDefaults.standard.stringArray(forKey: excludedKey) ?? []
+        return !excluded.contains(app.id)
+    }
+
+    public static func setIncluded(_ app: App, _ on: Bool) {
+        var excluded = UserDefaults.standard.stringArray(forKey: excludedKey) ?? []
+        excluded.removeAll { $0 == app.id }
+        if !on { excluded.append(app.id) }
+        UserDefaults.standard.set(excluded, forKey: excludedKey)
+    }
+
+    /// The apps the user added, whether or not they are installed. A missing,
+    /// empty, or unreadable file is no extra apps, never a failure.
+    public static func userApps(in file: URL = file) -> [App] {
+        guard let data = try? Data(contentsOf: file),
+              let entries = try? JSONDecoder().decode([StoredApp].self, from: data) else { return [] }
+        return entries.compactMap { $0.app }
+    }
+
+    /// Why an app was not saved. The menu turns each one into its own text.
+    public enum Rejection: Equatable {
+        case bundleID, preferenceKey, bookmarkKey, unwritable
+    }
+
+    /// Adds an app and remembers it. The id and keys are checked first; a
+    /// rejected entry is reported and not saved. `bookmarkKey` is nil for an
+    /// archived file URL and a string for a plain path, empty when the app
+    /// keeps no bookmark beside it. When the takeover is on, the new app is
+    /// pointed at Tendedero's folder straight away. `file` is the JSON file, so
+    /// a check can use its own instead of the real one.
+    public static func add(id: String, directoryKey: String, bookmarkKey: String?,
+                           to file: URL = file) -> Rejection? {
+        guard isBundleID(id) else { return .bundleID }
+        guard isPreferenceKey(directoryKey) else { return .preferenceKey }
+        let bookmark = bookmarkKey?.trimmingCharacters(in: .whitespaces)
+        if let bookmark, !bookmark.isEmpty, !isPreferenceKey(bookmark) { return .bookmarkKey }
+        let preference: Preference = bookmark == nil
+            ? .archivedURL(key: directoryKey)
+            : .stringPath(key: directoryKey, bookmarkKey: bookmark ?? "")
+        let name = id.split(separator: ".").last.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? id
+        var entries = read(file)
+        entries.removeAll { $0.id == id }
+        entries.append(StoredApp(id: id, name: name, preference: preference))
+        guard write(entries, to: file) else { return .unwritable }
+        if isEnabled { apply(to: App(id: id, name: name, preference: preference)) }
+        return nil
+    }
+
+    /// Forgets a user-added app. A built-in id is never removed. When the
+    /// takeover is on, the app gets its own folder back first.
+    public static func remove(id: String, from file: URL = file) {
+        guard !known.contains(where: { $0.id == id }) else { return }
+        var entries = read(file)
+        let removed = entries.first { $0.id == id }
+        entries.removeAll { $0.id == id }
+        guard write(entries, to: file) else { return }
+        if isEnabled, let app = removed?.app { restore(app) }
     }
 
     /// Points every installed app at Tendedero's folder, remembering what
@@ -108,7 +193,7 @@ public enum ThirdPartyCapture {
     public static func restore() {
         let saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
         for id in saved.keys {
-            guard let app = known.first(where: { $0.id == id }) else { continue }
+            guard let app = apps(includingExcluded: true).first(where: { $0.id == id }) else { continue }
             restore(app)
         }
     }
@@ -153,6 +238,90 @@ public enum ThirdPartyCapture {
             return false
         }
         return true
+    }
+
+    // MARK: - The JSON file of user-added apps
+
+    /// Where the user-added apps are kept. Created the first time one is added.
+    public static let file: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("Tendedero/third-party-apps.json")
+    }()
+
+    /// One entry in the JSON file. A shape this version does not know decodes
+    /// as nil and is skipped, so an older file keeps working.
+    private struct StoredApp: Codable {
+        let id: String
+        let name: String
+        let kind: String
+        let key: String
+        let bookmark: String?
+
+        init(id: String, name: String, preference: Preference) {
+            self.id = id
+            self.name = name
+            switch preference {
+            case .archivedURL(let key):
+                self.kind = "archivedURL"
+                self.key = key
+                self.bookmark = nil
+            case .stringPath(let key, let bookmarkKey):
+                self.kind = "stringPath"
+                self.key = key
+                self.bookmark = bookmarkKey
+            }
+        }
+
+        var app: App? {
+            guard isBundleID(id), isPreferenceKey(key) else { return nil }
+            let preference: Preference
+            switch kind {
+            case "archivedURL": preference = .archivedURL(key: key)
+            case "stringPath":
+                // An empty bookmark is a plain path with none beside it, which
+                // is how the menu stores one the user left blank.
+                guard let bookmark, bookmark.isEmpty || isPreferenceKey(bookmark) else { return nil }
+                preference = .stringPath(key: key, bookmarkKey: bookmark)
+            default: return nil
+            }
+            return App(id: id, name: name, preference: preference)
+        }
+    }
+
+    private static func read(_ file: URL) -> [StoredApp] {
+        guard let data = try? Data(contentsOf: file),
+              let entries = try? JSONDecoder().decode([StoredApp].self, from: data) else { return [] }
+        return entries
+    }
+
+    private static func write(_ entries: [StoredApp], to file: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(entries)
+            try data.write(to: file, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// A reverse-DNS bundle id: two or more segments, each starting with a
+    /// letter or digit and otherwise letters, digits, or hyphens.
+    private static func isBundleID(_ id: String) -> Bool {
+        let segments = id.split(separator: ".", omittingEmptySubsequences: false)
+        guard segments.count >= 2 else { return false }
+        return segments.allSatisfy(isSegment)
+    }
+
+    private static func isSegment(_ segment: Substring) -> Bool {
+        guard let first = segment.first, first.isLetter || first.isNumber else { return false }
+        return segment.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+    }
+
+    /// A preference key: non-empty, and only letters, digits, dots, and hyphens.
+    private static func isPreferenceKey(_ key: String) -> Bool {
+        !key.isEmpty && key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }
     }
 
     // MARK: - Reading and writing one preference

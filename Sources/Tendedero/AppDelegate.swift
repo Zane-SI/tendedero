@@ -261,6 +261,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startWatcher()
     }
 
+    /// The submenu for adding and removing screenshot apps. Built-ins come
+    /// first and can only be turned on or off; the apps the user added can be
+    /// removed as well.
+    private func configureAppsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: L("Configure other screenshot apps"), action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for app in ThirdPartyCapture.present() {
+            let title = app.builtIn ? "\(app.name) \(L("(built in)"))" : app.name
+            let row = ClosureMenuItem(title) { [weak self] in self?.toggleApp(app) }
+            row.state = ThirdPartyCapture.isIncluded(app) ? .on : .off
+            submenu.addItem(row)
+        }
+        submenu.addItem(.separator())
+        submenu.addItem(ClosureMenuItem(L("Add screenshot app…")) { [weak self] in self?.addApp() })
+        if !ThirdPartyCapture.userApps().isEmpty {
+            submenu.addItem(ClosureMenuItem(L("Remove screenshot app…")) { [weak self] in self?.removeApp() })
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    /// A row turns one app on or off. The master switch still governs all of
+    /// them: while it is off, nothing is taken over whatever the rows say.
+    private func toggleApp(_ app: ThirdPartyCapture.App) {
+        let on = !ThirdPartyCapture.isIncluded(app)
+        ThirdPartyCapture.setIncluded(app, on)
+        guard ThirdPartyCapture.isEnabled else { return }
+        if on { ThirdPartyCapture.apply(to: app) } else { ThirdPartyCapture.restore(app) }
+        startWatcher()
+    }
+
+    /// The words for a rejected app. Each is a localized string key.
+    private func rejectionText(_ rejection: ThirdPartyCapture.Rejection) -> String {
+        switch rejection {
+        case .bundleID: return L("Not a bundle id. Use segments like com.example.app.")
+        case .preferenceKey: return L("The preference key can only use letters, digits, dots, and hyphens.")
+        case .bookmarkKey: return L("The bookmark key can only use letters, digits, dots, and hyphens.")
+        case .unwritable: return L("Could not save the app.")
+        }
+    }
+
+    /// Asks for the bundle id, the preference key, and the format, one alert
+    /// at a time. A value that does not fit is rejected and nothing is saved.
+    private func addApp() {
+        NSApp.activate(ignoringOtherApps: true)
+        guard let id = askText(L("Bundle id"), prompt: L("The app's bundle id, such as com.example.app.")) else { return }
+        guard let key = askText(L("Preference key"), prompt: L("The preference that holds the folder the app saves to.")) else { return }
+        let format = NSAlert()
+        format.messageText = L("How does the app store the folder?")
+        format.addButton(withTitle: L("Archived file URL"))
+        format.addButton(withTitle: L("Plain string path"))
+        format.addButton(withTitle: L("Cancel"))
+        let choice = format.runModal()
+        guard choice != .alertThirdButtonReturn else { return }
+        var bookmark: String? = nil
+        if choice == .alertSecondButtonReturn {
+            guard let typed = askText(L("Bookmark key"), prompt: L("The bookmark stored beside the path. Leave it empty if there is none."),
+                                      empty: true) else { return }
+            bookmark = typed
+        }
+        if let problem = ThirdPartyCapture.add(id: id, directoryKey: key, bookmarkKey: bookmark) {
+            let alert = NSAlert()
+            alert.messageText = L("That app could not be added")
+            alert.informativeText = rejectionText(problem)
+            alert.runModal()
+            return
+        }
+        startWatcher()
+    }
+
+    /// Lists only the apps the user added, and deletes the chosen one.
+    private func removeApp() {
+        let apps = ThirdPartyCapture.userApps()
+        guard !apps.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Remove screenshot app…")
+        alert.addButton(withTitle: L("Remove"))
+        alert.addButton(withTitle: L("Cancel"))
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        apps.forEach { popup.addItem(withTitle: $0.name) }
+        alert.accessoryView = popup
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        ThirdPartyCapture.remove(id: apps[popup.indexOfSelectedItem].id)
+        startWatcher()
+    }
+
+    /// One line of text, asked with an alert. Nil when the user cancels.
+    /// `empty` allows an empty answer, which comes back as an empty string.
+    private func askText(_ title: String, prompt: String, empty: Bool = false) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = prompt
+        alert.addButton(withTitle: L("OK"))
+        alert.addButton(withTitle: L("Cancel"))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        if text.isEmpty, !empty { return nil }
+        return text
+    }
+
     /// Asked once. Changing system settings is the user's call, never ours.
     private func offerInbox() {
         Inbox.wasOffered = true
@@ -722,6 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.toolTip = String(format: L("New captures from %@ hang on the line"), names)
             menu.addItem(item)
         }
+        menu.addItem(configureAppsItem())
 
         let clipboard = ClosureMenuItem(L("Hang copied images")) { [weak self] in
             self?.setClipboard(!ClipboardWatcher.isEnabled)

@@ -163,5 +163,45 @@ if storedString() != keptPath { fail("restore deleted a string path whose snapsh
 if storedBookmark() != keptBookmark { fail("restore deleted a bookmark whose snapshot was lost") }
 print("restore keeps a string path when the snapshot is missing")
 
+// A user-added app round-trips through its own JSON file, never the real one.
+let json = FileManager.default.temporaryDirectory
+    .appendingPathComponent("tendedero-apps-\(UUID().uuidString).json")
+defer { try? FileManager.default.removeItem(at: json) }
+if ThirdPartyCapture.add(id: "not a bundle id", directoryKey: "saveFolder", bookmarkKey: nil, to: json) == nil {
+    fail("a bundle id without segments was accepted")
+}
+if ThirdPartyCapture.add(id: "com.example.sample", directoryKey: "save folder", bookmarkKey: nil, to: json) == nil {
+    fail("a preference key with a space was accepted")
+}
+if ThirdPartyCapture.add(id: "com.example.sample", directoryKey: "saveFolder", bookmarkKey: nil, to: json) != nil {
+    fail("a valid app was rejected")
+}
+let added = ThirdPartyCapture.userApps(in: json)
+if added.count != 1 || added[0].id != "com.example.sample" || added[0].name != "Sample" {
+    fail("the added app did not round-trip: \(added.map(\.name))")
+}
+if case .archivedURL(let key) = added[0].preference {
+    if key != "saveFolder" { fail("the preference key came back as \(key)") }
+} else {
+    fail("the app came back with the wrong preference shape")
+}
+// A plain string path with no bookmark stays a string path, not an archive.
+if ThirdPartyCapture.add(id: "com.example.plain", directoryKey: "saveFolder", bookmarkKey: "", to: json) != nil {
+    fail("a plain path with an empty bookmark was rejected")
+}
+let plain = ThirdPartyCapture.userApps(in: json).first { $0.id == "com.example.plain" }
+if case .stringPath(let key, let bookmark) = plain?.preference {
+    if key != "saveFolder" || bookmark != "" { fail("the plain path came back changed") }
+} else {
+    fail("an empty bookmark was stored as an archived URL")
+}
+if ThirdPartyCapture.add(id: "com.example.bad", directoryKey: "saveFolder", bookmarkKey: "bad key", to: json) == nil {
+    fail("a bookmark key with a space was accepted")
+}
+ThirdPartyCapture.remove(id: "com.example.sample", from: json)
+ThirdPartyCapture.remove(id: "com.example.plain", from: json)
+if !ThirdPartyCapture.userApps(in: json).isEmpty { fail("the removed app is still stored") }
+print("a user-added app round-trips through the JSON file")
+
 print("ok")
 }
