@@ -38,14 +38,20 @@ public enum ThirdPartyCapture {
         public let name: String
         /// Where the app keeps its save folder.
         public let preference: Preference
+        /// A Bool the app reads to decide whether to ask where to save, when it
+        /// has one. Absent means the prompt is on. Nil for an app with no such
+        /// prompt. Only Clip has one.
+        public let promptKey: String?
         /// A built-in app ships with Tendedero. One the user added is stored in
         /// the JSON file and can be removed again.
         public let builtIn: Bool
 
-        public init(id: String, name: String, preference: Preference, builtIn: Bool = false) {
+        public init(id: String, name: String, preference: Preference,
+                    promptKey: String? = nil, builtIn: Bool = false) {
             self.id = id
             self.name = name
             self.preference = preference
+            self.promptKey = promptKey
             self.builtIn = builtIn
         }
 
@@ -59,8 +65,13 @@ public enum ThirdPartyCapture {
     /// beside it that it resolves first. Its sandbox is off, so the keys can
     /// be read and written from here.
     public static let known: [App] = [
+        // Clip reads and writes `screenshotSaveDirectory` as a plain path
+        // string, and keeps no bookmark beside it. It also asks where to save
+        // unless `askSaveLocation` is off, and while that prompt is on nothing
+        // is written to a file at all. An absent value means the prompt is on.
         App(id: "com.chengffei.clip", name: "Clip",
-            preference: .archivedURL(key: "screenshotSaveDirectory"), builtIn: true),
+            preference: .stringPath(key: "screenshotSaveDirectory", bookmarkKey: ""),
+            promptKey: "askSaveLocation", builtIn: true),
         App(id: "com.trongduong.snapzy", name: "Snapzy",
             preference: .stringPath(key: "exportLocation",
                                      bookmarkKey: "exportLocation.bookmark"), builtIn: true),
@@ -233,7 +244,7 @@ public enum ThirdPartyCapture {
     public static func isRedirected(_ app: App) -> Bool {
         guard let current = storedURL(app) else { return false }
         guard current.standardizedFileURL == Inbox.folder.standardizedFileURL else { return false }
-        if case .stringPath(_, let bookmarkKey) = app.preference,
+        if case .stringPath(_, let bookmarkKey) = app.preference, !bookmarkKey.isEmpty,
            CFPreferencesCopyAppValue(bookmarkKey as CFString, app.domain) != nil {
             return false
         }
@@ -340,9 +351,19 @@ public enum ThirdPartyCapture {
             if let path = CFPreferencesCopyAppValue(app.key, app.domain) as? String {
                 saved = ["present": true, "path": path]
             }
-            if let bookmark = CFPreferencesCopyAppValue(bookmarkKey as CFString, app.domain) as? Data {
+            if !bookmarkKey.isEmpty,
+               let bookmark = CFPreferencesCopyAppValue(bookmarkKey as CFString, app.domain) as? Data {
                 saved["bookmark"] = bookmark
             }
+        }
+        // An app that asks where to save writes nothing while that prompt is
+        // on. The prior answer is remembered so it comes back exactly, and an
+        // absent key is remembered as absent rather than guessed.
+        if let promptKey = app.promptKey {
+            if let on = CFPreferencesCopyAppValue(promptKey as CFString, app.domain) as? Bool {
+                saved["prompt"] = on
+            }
+            saved["promptPresent"] = saved["prompt"] != nil
         }
         return saved
     }
@@ -357,9 +378,14 @@ public enum ThirdPartyCapture {
             // The bookmark is what the app resolves, so a stale one would keep
             // sending captures to the old folder. Both changes are set before
             // the one synchronize, so the path never lands without the removal.
-            // It comes back on restore.
+            // It comes back on restore. An empty key means there is no bookmark.
             CFPreferencesSetAppValue(app.key, folder.path as CFString, app.domain)
-            CFPreferencesSetAppValue(bookmarkKey as CFString, nil, app.domain)
+            if !bookmarkKey.isEmpty {
+                CFPreferencesSetAppValue(bookmarkKey as CFString, nil, app.domain)
+            }
+        }
+        if let promptKey = app.promptKey {
+            CFPreferencesSetAppValue(promptKey as CFString, false as CFBoolean, app.domain)
         }
         CFPreferencesAppSynchronize(app.domain)
     }
@@ -378,8 +404,17 @@ public enum ThirdPartyCapture {
             guard snapshot["path"] != nil || snapshot["present"] as? Bool == false else { return }
             let path = snapshot["path"] as? String
             CFPreferencesSetAppValue(app.key, path as CFString?, app.domain)
-            let bookmark = snapshot["bookmark"] as? Data
-            CFPreferencesSetAppValue(bookmarkKey as CFString, bookmark as CFData?, app.domain)
+            if !bookmarkKey.isEmpty {
+                let bookmark = snapshot["bookmark"] as? Data
+                CFPreferencesSetAppValue(bookmarkKey as CFString, bookmark as CFData?, app.domain)
+            }
+        }
+        // Only a prompt we actually remembered is put back. A snapshot from
+        // before this was recorded carries neither key, and deleting the value
+        // then would drop an answer we never saved.
+        if let promptKey = app.promptKey, snapshot["promptPresent"] != nil {
+            let on = snapshot["prompt"] as? Bool
+            CFPreferencesSetAppValue(promptKey as CFString, on as CFBoolean?, app.domain)
         }
         CFPreferencesAppSynchronize(app.domain)
     }

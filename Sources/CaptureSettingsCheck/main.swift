@@ -7,6 +7,7 @@ import Foundation
 
 let domain = "com.tendedero.third-party-capture.check"
 let key = "screenshotSaveDirectory" as CFString
+let promptKey = "askSaveLocation" as CFString
 let domainCF = domain as CFString
 let app = ThirdPartyCapture.App(
     id: domain, name: "Stand-in",
@@ -59,6 +60,8 @@ defer {
     CFPreferencesSetAppValue(key, nil, domainCF)
     CFPreferencesSetAppValue(pathKey, nil, domainCF)
     CFPreferencesSetAppValue(bookmarkKey, nil, domainCF)
+    CFPreferencesSetAppValue(promptKey, nil, domainCF)
+    CFPreferencesSetAppValue("plainPath" as CFString, nil, domainCF)
     CFPreferencesAppSynchronize(domainCF)
     try? FileManager.default.removeItem(at: own)
     UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
@@ -162,6 +165,77 @@ ThirdPartyCapture.restore(stringApp)
 if storedString() != keptPath { fail("restore deleted a string path whose snapshot was lost") }
 if storedBookmark() != keptBookmark { fail("restore deleted a bookmark whose snapshot was lost") }
 print("restore keeps a string path when the snapshot is missing")
+
+// A plain path with no bookmark beside it, which is how Clip stores its
+// folder. What lands is the path as a string, never an archived URL, and the
+// empty bookmark key is never written.
+let plainKey = "plainPath" as CFString
+let plainApp = ThirdPartyCapture.App(
+    id: domain, name: "Plain stand-in",
+    preference: .stringPath(key: "plainPath", bookmarkKey: ""))
+let plainBefore = own.appendingPathComponent("plain").path
+CFPreferencesSetAppValue(plainKey, plainBefore as CFString, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: plainApp)
+if !(CFPreferencesCopyAppValue(plainKey, domainCF) is String) {
+    fail("apply wrote something other than a plain string path")
+}
+if ThirdPartyCapture.saveDirectory(of: plainApp)?.standardizedFileURL != Inbox.folder.standardizedFileURL {
+    fail("apply did not point the plain-path app at Tendedero")
+}
+if CFPreferencesCopyAppValue("" as CFString, domainCF) != nil {
+    fail("apply wrote a value under the empty bookmark key")
+}
+ThirdPartyCapture.restore(plainApp)
+if CFPreferencesCopyAppValue(plainKey, domainCF) as? String != plainBefore {
+    fail("restore changed the plain path the app had")
+}
+print("a plain path with no bookmark round-trips as a string")
+
+// The prompt that keeps screenshots out of a file is turned off, and the
+// answer the app had comes back, including when there was none.
+let prompted = ThirdPartyCapture.App(
+    id: domain, name: "Prompted stand-in",
+    preference: .stringPath(key: "plainPath", bookmarkKey: ""), promptKey: "askSaveLocation")
+CFPreferencesSetAppValue(plainKey, plainBefore as CFString, domainCF)
+CFPreferencesSetAppValue(promptKey, true as CFBoolean, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: prompted)
+if CFPreferencesCopyAppValue(promptKey, domainCF) as? Bool != false {
+    fail("apply left the save prompt on")
+}
+ThirdPartyCapture.restore(prompted)
+if CFPreferencesCopyAppValue(promptKey, domainCF) as? Bool != true {
+    fail("restore did not put the save prompt back on")
+}
+print("restore puts the save prompt back")
+
+CFPreferencesSetAppValue(plainKey, plainBefore as CFString, domainCF)
+CFPreferencesSetAppValue(promptKey, nil, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.removeObject(forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.apply(to: prompted)
+if CFPreferencesCopyAppValue(promptKey, domainCF) as? Bool != false {
+    fail("apply did not turn off a save prompt that was unset")
+}
+ThirdPartyCapture.restore(prompted)
+if CFPreferencesCopyAppValue(promptKey, domainCF) != nil {
+    fail("restore left a save prompt where none was set")
+}
+print("restore clears a save prompt that was never set")
+
+// A snapshot from before the prompt was remembered must not delete the
+// answer the app still has.
+CFPreferencesSetAppValue(promptKey, true as CFBoolean, domainCF)
+CFPreferencesAppSynchronize(domainCF)
+UserDefaults.standard.set([domain: ["present": true, "path": plainBefore]], forKey: "thirdPartyCaptureSaved")
+ThirdPartyCapture.restore(prompted)
+if CFPreferencesCopyAppValue(promptKey, domainCF) as? Bool != true {
+    fail("restore deleted a save prompt whose snapshot never recorded it")
+}
+print("restore keeps a save prompt the snapshot did not record")
 
 // A user-added app round-trips through its own JSON file, never the real one.
 let json = FileManager.default.temporaryDirectory
