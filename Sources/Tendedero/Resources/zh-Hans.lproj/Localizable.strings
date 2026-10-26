@@ -26,8 +26,8 @@
 "The bookmark stored beside the path. Leave it empty if there is none." = "存在路径旁边的书签。没有就留空。";
 "That app could not be added" = "没能添加该 App";
 "Not a bundle id. Use segments like com.example.app." = "这不是 Bundle ID。请用 com.example.app 这样的分段格式。";
-"The preference key can only use letters, digits, dots, and hyphens." = "偏好设置键名只能包含字母、数字、点和下划线以外的连字符。";
-"The bookmark key can only use letters, digits, dots, and hyphens." = "书签键名只能包含字母、数字、点和下划线以外的连字符。";
+"The preference key can only use letters, digits, dots, and hyphens." = "偏好设置键名只能包含字母、数字、点和连字符。";
+"The bookmark key can only use letters, digits, dots, and hyphens." = "书签键名只能包含字母、数字、点和连字符。";
 "Could not save the app." = "没能保存该 App。";
 "Remove" = "移除";
 "OK" = "OK";
